@@ -1,6 +1,6 @@
-
 #!/usr/bin/env python3
 
+import math
 import time
 import rclpy
 from rclpy.node import Node
@@ -17,15 +17,23 @@ from geometry_msgs.msg import PoseStamped
 #
 # Z is positive UP here (px4 has the opposite)
 
-CUBE_X = 0.0       # Absolute north coordinate of first corner
-CUBE_Y = 0.0       # Absolute east coordinate of first corner
+MISSION_MODE = 'circle'  # cube / circle
 
+CUBE_X = 0.0
+CUBE_Y = 0.0
 BOTTOM_ALTITUDE = 1.5
 CUBE_SIDE = 1.0
 
 TAKEOFF_WAIT = 6.0
 TIME_PER_WAYPOINT = 2.9
 PUBLISH_RATE = 10.0
+
+CIRCLE_CENTER_X = 0.0
+CIRCLE_CENTER_Y = 0.0
+CIRCLE_RADIUS = 1.5
+CIRCLE_ALTITUDE = 1.5
+CIRCLE_PERIOD = 18.0
+CIRCLE_DIRECTION = 1.0  # +1 = CCW, -1 = CW
 
 
 class CubeMission(Node):
@@ -63,7 +71,7 @@ class CubeMission(Node):
         self.command_pub.publish(msg)
         self.get_logger().info(f'Sent command: {command}')
 
-    def send_position(self, x, y, z):
+    def send_position(self, x, y, z, yaw=0.0):
         msg = PoseStamped()
 
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -73,13 +81,19 @@ class CubeMission(Node):
         msg.pose.position.y = float(y)
         msg.pose.position.z = float(z)
 
-        # Identity quaternion: yaw = 0
-        msg.pose.orientation.x = 0.0
-        msg.pose.orientation.y = 0.0
-        msg.pose.orientation.z = 0.0
-        msg.pose.orientation.w = 1.0
+        yaw_quat = self.yaw_to_quaternion(yaw)
+        msg.pose.orientation.x = yaw_quat[0]
+        msg.pose.orientation.y = yaw_quat[1]
+        msg.pose.orientation.z = yaw_quat[2]
+        msg.pose.orientation.w = yaw_quat[3]
 
         self.control_pub.publish(msg)
+
+    def yaw_to_quaternion(self, yaw):
+        half_yaw = yaw / 2.0
+        qz = math.sin(half_yaw)
+        qw = math.cos(half_yaw)
+        return (0.0, 0.0, qz, qw)
 
     def wait_for_state(self, target, timeout):
         self.get_logger().info(f'Waiting for state: {target}')
@@ -98,41 +112,46 @@ class CubeMission(Node):
 
         return False
 
-    def hold_position(self, x, y, z, duration):
+    def hold_position(self, x, y, z, duration, yaw=0.0):
         self.get_logger().info(
-            f'Waypoint: X={x:.2f}, Y={y:.2f}, Z={z:.2f}'
+            f'Waypoint: X={x:.2f}, Y={y:.2f}, Z={z:.2f}, Yaw={yaw:.2f} rad'
         )
 
         start = time.monotonic()
 
         while rclpy.ok() and time.monotonic() - start < duration:
-            self.send_position(x, y, z)
+            self.send_position(x, y, z, yaw)
             rclpy.spin_once(self, timeout_sec=0.05)
             time.sleep(1.0 / PUBLISH_RATE)
 
-    def run_mission(self):
+    def run_circle_mission(self):
+        self.get_logger().info(
+            'Starting circular orbit: radius=%.2f m, alt=%.2f m, period=%.2f s'
+            % (CIRCLE_RADIUS, CIRCLE_ALTITUDE, CIRCLE_PERIOD)
+        )
 
-        # Wait for ROS communication to initialize
-        self.get_logger().info('Waiting for ROS connections...')
-        time.sleep(2.0)
+        orbit_start = time.monotonic()
+        while rclpy.ok():
+            if self.state != 'mission':
+                self.get_logger().error(
+                    f'Drone left mission state: {self.state}'
+                )
+                return
 
-        # 1. ARM / prepare PX4
-        self.send_command('COMMAND_ARM')
+            elapsed = time.monotonic() - orbit_start
+            theta = CIRCLE_DIRECTION * (2.0 * math.pi * elapsed / CIRCLE_PERIOD)
+            x = CIRCLE_CENTER_X + CIRCLE_RADIUS * math.cos(theta)
+            y = CIRCLE_CENTER_Y + CIRCLE_RADIUS * math.sin(theta)
+            z = CIRCLE_ALTITUDE
+            yaw = theta + math.pi / 2.0
 
-        if not self.wait_for_state('armed', 10.0):
-            self.get_logger().error('ARM timeout. Mission aborted.')
-            return
+            self.send_position(x, y, z, yaw)
+            rclpy.spin_once(self, timeout_sec=0.05)
+            time.sleep(1.0 / PUBLISH_RATE)
 
-        # 2. Start takeoff
-        self.send_command('COMMAND_MISSION_START')
+    def run_cube_mission(self):
+        self.get_logger().info('Starting cube trajectory!')
 
-        self.get_logger().info('Taking off...')
-        start = time.monotonic()
-
-        while rclpy.ok() and time.monotonic() - start < TAKEOFF_WAIT:
-            rclpy.spin_once(self, timeout_sec=0.1)
-
-        # 3. Define the eight cube corners.
         x0 = CUBE_X
         y0 = CUBE_Y
         x1 = CUBE_X + CUBE_SIDE
@@ -142,19 +161,16 @@ class CubeMission(Node):
         z1 = BOTTOM_ALTITUDE + CUBE_SIDE
 
         waypoints = [
-            (x0, y0, z0),  # A: bottom front-left
-            (x1, y0, z0),  # B
-            (x1, y1, z0),  # C
-            (x0, y1, z0),  # D
-            (x0, y1, z1),  # E: climb
-            (x1, y1, z1),  # F
-            (x1, y0, z1),  # G
-            (x0, y0, z1),  # H
-            (x0, y0, z0),  # A: descend
+            (x0, y0, z0),
+            (x1, y0, z0),
+            (x1, y1, z0),
+            (x0, y1, z0),
+            (x0, y1, z1),
+            (x1, y1, z1),
+            (x1, y0, z1),
+            (x0, y0, z1),
+            (x0, y0, z0),
         ]
-
-        # 4. Trace cube
-        self.get_logger().info('Starting cube trajectory!')
 
         for i, (x, y, z) in enumerate(waypoints):
             if not rclpy.ok():
@@ -174,7 +190,22 @@ class CubeMission(Node):
                 x, y, z, TIME_PER_WAYPOINT
             )
 
-        # 5. Return home and land
+    def run_mission(self):
+        self.get_logger().info('Waiting for ROS connections...')
+        time.sleep(2.0)
+
+        self.send_command('COMMAND_ARM')
+        if not self.wait_for_state('armed', 10.0):
+            self.get_logger().error('ARM timeout. Mission aborted.')
+            return
+
+        self.send_command('COMMAND_MISSION_START')
+
+        if MISSION_MODE == 'circle':
+            self.run_circle_mission()
+        else:
+            self.run_cube_mission()
+
         self.get_logger().info('Landing.')
         self.send_command('COMMAND_RETURN_HOME')
 
@@ -187,9 +218,7 @@ def main():
     try:
         node.run_mission()
     except KeyboardInterrupt:
-        node.get_logger().warning(
-            'cancelling.'
-        )
+        node.get_logger().warning('cancelling.')
     finally:
         node.destroy_node()
         rclpy.shutdown()
