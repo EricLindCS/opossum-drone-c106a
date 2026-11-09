@@ -1,6 +1,9 @@
-cat > .gitignore <<'EOF'
-# ESP-IDF build output
+# ROS 2 colcon and ESP-IDF build output
 **/build/
+**/install/
+**/log/
+**/.colcon/
+**/.ros/
 
 # Local ESP-IDF configuration (may contain credentials)
 **/sdkconfig
