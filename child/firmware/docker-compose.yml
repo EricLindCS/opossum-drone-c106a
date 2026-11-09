@@ -1,0 +1,11 @@
+services:
+  child:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: opossum/child-esp-idf:6.0
+    working_dir: /workspace/child/firmware
+    volumes:
+      - ../..:/workspace
+    stdin_open: true
+    tty: true

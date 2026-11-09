@@ -1,0 +1,44 @@
+dependencies:
+  espressif/mavlink:
+    component_hash: 06bd18a376a5bcc5ff7d4dddfe1a704e1f32b9920e284d2fbd795377b0c1755d
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.3.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.0.0~1
+  idf:
+    source:
+      type: idf
+    version: 6.0.3
+  micro-ros/micro_ros_espidf_component:
+    dependencies:
+    - name: idf
+      version: '>=5.2'
+    - name: espressif/esp_wifi_remote
+      rules:
+      - if: target in [esp32p4]
+      version: '>=0.10,<2.0'
+    - name: espressif/esp_hosted
+      rules:
+      - if: target in [esp32p4]
+      version: ~2
+    source:
+      path: ../../micro_ros_espidf_component
+      type: local
+    targets:
+    - esp32
+    - esp32s2
+    - esp32s3
+    - esp32c3
+    - esp32c6
+    - esp32p4
+    version: 22.0.0
+direct_dependencies:
+- espressif/mavlink
+- micro-ros/micro_ros_espidf_component
+manifest_hash: 93be0d25037373a27aa46a848ea0eaa48a704ca084377675afd8be38c7a04cc8
+target: esp32
+version: 3.0.0

@@ -1,0 +1,22 @@
+cat > .gitignore <<'EOF'
+# ESP-IDF build output
+**/build/
+
+# Local ESP-IDF configuration (may contain credentials)
+**/sdkconfig
+**/sdkconfig.old
+**/sdkconfig.defaults
+
+#managed_components
+**/managed_components/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+EOF
