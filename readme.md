@@ -16,9 +16,15 @@ ex: docker compose -f child/firmware/docker-compose.yml run --rm child idf.py -p
 
 One command:
 ```bash
-cd opossum_drone
+cd ~/!!path!!/opossum_drone/child/firmware
 
-docker compose -f child/firmware/docker-compose.yml run --rm child \
-  idf.py -p /dev/ttyACM0 build flash monitor
+python3 -m esptool \
+  --chip esp32c6 \
+  --port /dev/cu.usbmodem101 \
+  --baud 460800 \
+  write-flash \
+  0x0 bootloader.bin \
+  0x8000 partition-table.bin \
+  0x10000 int32_publisher.bin
 
 ```
