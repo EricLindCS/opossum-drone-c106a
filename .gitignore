@@ -24,3 +24,4 @@ __pycache__/
 .DS_Store
 EOF
 micro_ros_espidf_component/
+/child/firmware/components

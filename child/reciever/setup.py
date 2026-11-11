@@ -20,6 +20,7 @@ setup(
     entry_points={
         'console_scripts': [
             'cube_mission = reciever.cube_mission:main',
+            'drone_pose_visualizer = reciever.drone_pose_visualizer:main',
         ],
     },
 )

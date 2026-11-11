@@ -65,6 +65,7 @@
 #include <std_msgs/msg/string.h>
 #include <std_msgs/msg/int8.h>
 #include <geometry_msgs/msg/pose_stamped.h>
+#include <geometry_msgs/msg/vector3.h>
 #include <uros_network_interfaces.h>
 
 
@@ -329,6 +330,9 @@ static void drone_id_led_update(void)
 static rcl_publisher_t    publisher_state;
 static rcl_publisher_t    publisher_role;
 static rcl_publisher_t    publisher_battery;
+static rcl_publisher_t    publisher_attitude;
+static rcl_publisher_t    publisher_position;
+static rcl_publisher_t    publisher_velocity;
 
 static rcl_subscription_t command_sub;
 static rcl_subscription_t config_sub;
@@ -340,6 +344,9 @@ static geometry_msgs__msg__PoseStamped   control_msg;
 static std_msgs__msg__String             state_pub_msg;
 static std_msgs__msg__String             role_pub_msg;
 static std_msgs__msg__Int8               battery_pub_msg;
+static geometry_msgs__msg__Vector3        attitude_pub_msg;
+static geometry_msgs__msg__Vector3        position_pub_msg;
+static geometry_msgs__msg__Vector3        velocity_pub_msg;
 
 
 static char topic_gcs_command[64];
@@ -348,7 +355,17 @@ static char topic_gcs_control[64];
 static char topic_state[64];
 static char topic_role[64];
 static char topic_battery[64];
+static char topic_attitude[64];
+static char topic_position[64];
+static char topic_velocity[64];
 static char drone_ns[16];
+
+/* PX4 telemetry from MAVLink */
+static volatile float px4_att_roll = 0.0f;
+static volatile float px4_att_pitch = 0.0f;
+static volatile float px4_att_yaw = 0.0f;
+static volatile bool  px4_att_valid = false;
+static volatile float px4_vel_x = 0.0f, px4_vel_y = 0.0f, px4_vel_z = 0.0f;
 
 /* ══════════════════════════════════════════════════════════════════════════
  * Helpers
@@ -719,6 +736,28 @@ static void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
         RCSOFTCHECK(rcl_publish(&publisher_battery, &battery_pub_msg, NULL));
     }
 
+    /* Publish attitude, position, and velocity every 100 ms */
+    
+
+        if (px4_att_valid) {
+            attitude_pub_msg.x = px4_att_roll;
+            attitude_pub_msg.y = px4_att_pitch;
+            attitude_pub_msg.z = px4_att_yaw;
+            RCSOFTCHECK(rcl_publish(&publisher_attitude, &attitude_pub_msg, NULL));
+        }
+
+        if (px4_pos_valid) {
+            position_pub_msg.x = px4_pos_x;
+            position_pub_msg.y = px4_pos_y;
+            position_pub_msg.z = px4_pos_z;
+            RCSOFTCHECK(rcl_publish(&publisher_position, &position_pub_msg, NULL));
+
+            velocity_pub_msg.x = px4_vel_x;
+            velocity_pub_msg.y = px4_vel_y;
+            velocity_pub_msg.z = px4_vel_z;
+            RCSOFTCHECK(rcl_publish(&publisher_velocity, &velocity_pub_msg, NULL));
+        }
+
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -758,7 +797,18 @@ static void mavlink_rx_task_fn(void *arg)
                 px4_pos_x = lpos.x;
                 px4_pos_y = lpos.y;
                 px4_pos_z = -lpos.z;
+                px4_vel_x = lpos.vx;
+                px4_vel_y = lpos.vy;
+                px4_vel_z = lpos.vz;
                 px4_pos_valid = true;
+            } else if (rx_msg.msgid == MAVLINK_MSG_ID_ATTITUDE) {
+                mavlink_attitude_t att;
+                mavlink_msg_attitude_decode(&rx_msg, &att);
+                /* Convert from PX4 Euler angles (rad) to ROS Quaternion */
+                px4_att_roll  = att.roll;
+                px4_att_pitch = att.pitch;
+                px4_att_yaw   = att.yaw;
+                px4_att_valid = true;
             }
         }
     }
@@ -808,6 +858,16 @@ static void micro_ros_task(void *arg)
 
     RCCHECK(rclc_publisher_init_default(&publisher_battery, &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int8), topic_battery));
+
+    RCCHECK(rclc_publisher_init_default(&publisher_attitude, &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Vector3), topic_attitude));
+
+    RCCHECK(rclc_publisher_init_default(&publisher_position, &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Vector3), topic_position));
+
+    RCCHECK(rclc_publisher_init_default(&publisher_velocity, &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Vector3), topic_velocity));
+
 
     /* ── Subscribers ─────────────────────────────────────────────────────── */
     RCCHECK(rclc_subscription_init_best_effort(&command_sub, &node,
@@ -894,6 +954,9 @@ static void micro_ros_task(void *arg)
     RCCHECK(rcl_publisher_fini(&publisher_state,   &node));
     RCCHECK(rcl_publisher_fini(&publisher_role,    &node));
     RCCHECK(rcl_publisher_fini(&publisher_battery, &node));
+    RCCHECK(rcl_publisher_fini(&publisher_attitude, &node));
+    RCCHECK(rcl_publisher_fini(&publisher_position, &node));
+    RCCHECK(rcl_publisher_fini(&publisher_velocity, &node));
     RCCHECK(rcl_subscription_fini(&command_sub,      &node));
     RCCHECK(rcl_subscription_fini(&config_sub,        &node));
     RCCHECK(rcl_subscription_fini(&control_sub,       &node));
@@ -952,6 +1015,9 @@ void app_main(void)
     snprintf(topic_state,        sizeof(topic_state),          "/drone_%d/state",            DRONE_ID);
     snprintf(topic_role,         sizeof(topic_role),           "/drone_%d/role",             DRONE_ID);
     snprintf(topic_battery,      sizeof(topic_battery),        "/drone_%d/battery",          DRONE_ID);
+    snprintf(topic_attitude,     sizeof(topic_attitude),       "/drone_%d/attitude",         DRONE_ID);
+    snprintf(topic_position,     sizeof(topic_position),       "/drone_%d/position",         DRONE_ID);
+    snprintf(topic_velocity,     sizeof(topic_velocity),       "/drone_%d/velocity",         DRONE_ID);
 
     ESP_LOGI(TAG, "==============================");
     ESP_LOGI(TAG, "DRONE ID   : %d",           DRONE_ID);
