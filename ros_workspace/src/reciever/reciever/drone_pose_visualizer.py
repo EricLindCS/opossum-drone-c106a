@@ -18,14 +18,14 @@ class DronePoseVisualizer(Node):
 
         self.position_sub = self.create_subscription(
             Vector3,
-            '/child/local_position',
+            '/drone_1/position',
             self.position_callback,
             10,
         )
 
         self.attitude_sub = self.create_subscription(
             Vector3,
-            '/child/attitude',
+            '/drone_1/attitude',
             self.attitude_callback,
             10,
         )
@@ -55,26 +55,32 @@ class DronePoseVisualizer(Node):
 
     def publish_pose(self):
         if self._position is None or self._attitude is None:
+            self.get_logger().warn('Waiting for position and attitude data')
             return
 
         x, y, z = self._position
         roll, pitch, yaw = self._attitude
 
-        msg = PoseStamped()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'px4_local_ned'
+        now = self.get_clock().now().to_msg()
 
-        msg.pose.position.x = x
-        msg.pose.position.y = y
-        msg.pose.position.z = z
+        # Create pose.
+        pose = PoseStamped()
+        pose.header.stamp = now
+        pose.header.frame_id = 'map'
+
+        pose.pose.position.x = x
+        pose.pose.position.y = y
+        pose.pose.position.z = z
 
         qx, qy, qz, qw = self.quaternion_from_rpy(roll, pitch, yaw)
-        msg.pose.orientation.x = qx
-        msg.pose.orientation.y = qy
-        msg.pose.orientation.z = qz
-        msg.pose.orientation.w = qw
+        pose.pose.orientation.x = qx
+        pose.pose.orientation.y = qy
+        pose.pose.orientation.z = qz
+        pose.pose.orientation.w = qw
 
-        self.pose_pub.publish(msg)
+        self.get_logger().info(f'Publishing pose: {pose}')
+
+        self.pose_pub.publish(pose)
 
 
 def main():
