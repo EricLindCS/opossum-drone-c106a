@@ -2,5 +2,4 @@ dependencies:
   micro-ros/micro_ros_espidf_component:
     version: "^22.0.0"
     override_path: "../../../micro_ros_espidf_component"
-
   espressif/mavlink: ^1.0.0~1

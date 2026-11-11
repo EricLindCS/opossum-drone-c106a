@@ -40,5 +40,5 @@ direct_dependencies:
 - espressif/mavlink
 - micro-ros/micro_ros_espidf_component
 manifest_hash: 93be0d25037373a27aa46a848ea0eaa48a704ca084377675afd8be38c7a04cc8
-target: esp32
+target: esp32c6
 version: 3.0.0
