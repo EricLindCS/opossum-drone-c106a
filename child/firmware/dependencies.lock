@@ -1,4 +1,28 @@
 dependencies:
+  espressif/esp32-camera:
+    component_hash: f14a6a9a5c223e49ea7ce6387a2124fc4f8a2239d5f6a1de1850217244f774fe
+    dependencies:
+    - name: espressif/esp_jpeg
+      registry_url: https://components.espressif.com
+      require: public
+      version: ^1.3.1
+    - name: idf
+      require: private
+      version: '>=5.1'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.1.9
+  espressif/esp_jpeg:
+    component_hash: 47d19eac5f76fac06798c04f4d2579c7ab26fd33280ed10f43d8895175376bdf
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.3.2
   espressif/mavlink:
     component_hash: 06bd18a376a5bcc5ff7d4dddfe1a704e1f32b9920e284d2fbd795377b0c1755d
     dependencies:
@@ -37,8 +61,9 @@ dependencies:
     - esp32p4
     version: 22.0.0
 direct_dependencies:
+- espressif/esp32-camera
 - espressif/mavlink
 - micro-ros/micro_ros_espidf_component
-manifest_hash: 93be0d25037373a27aa46a848ea0eaa48a704ca084377675afd8be38c7a04cc8
-target: esp32c6
+manifest_hash: 1f07512089523e77a04bb25b63610424cf57c72df8d95d60d9fa62238bf7f09b
+target: esp32s3
 version: 3.0.0

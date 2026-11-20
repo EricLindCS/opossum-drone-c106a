@@ -2,4 +2,5 @@ dependencies:
   micro-ros/micro_ros_espidf_component:
     version: "^22.0.0"
     override_path: "../../../micro_ros_espidf_component"
-  espressif/mavlink: ^1.0.0~1
+  espressif/mavlink: "^1.0.0~1"
+  espressif/esp32-camera: "^2.0.15"

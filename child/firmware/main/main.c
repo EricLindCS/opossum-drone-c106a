@@ -1,4 +1,4 @@
-/* main.c — ocelotbot drone ESP32-C6 Firmware
+/* main.c — ocelotbot drone XIAO ESP32-S3 Sense Firmware
  * adapted from esp32-micro-ros-px4-offboard example
  *
  * ROS topics (subscribed):
@@ -11,7 +11,7 @@
  *   /drone_{ID}/role               std_msgs/String         — role (idle)
  *   /drone_{ID}/battery            std_msgs/Int8           — battery % (0–100, -1=unknown)
  *
- * MAVLink → PX4 (UART1 57600):
+ * MAVLink ↔ PX4 (UART1 115200):
  *   Heartbeat,
  *   COMPONENT_ARM_DISARM, SET_MODE,
  *   SET_POSITION_TARGET_LOCAL_NED,
@@ -34,6 +34,7 @@
 #include <sys/types.h>  /* Picolibc: declare system types before lwIP headers */
 #include <math.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -67,14 +68,29 @@
 #include <std_msgs/msg/int8.h>
 #include <geometry_msgs/msg/pose_stamped.h>
 #include <geometry_msgs/msg/vector3.h>
+#include <sensor_msgs/msg/image.h>
+#include <micro_ros_utilities/type_utilities.h>
+#include <micro_ros_utilities/string_utilities.h>
 #include <uros_network_interfaces.h>
 
+#include "boards.h"
+
+#ifndef APP_CPU_NUM
+#define APP_CPU_NUM PRO_CPU_NUM
+#endif
+#ifndef portTICK_RATE_MS
+#define portTICK_RATE_MS portTICK_PERIOD_MS
+#endif
 
 static const char *TAG = "drone";
 
+
+
 /* ── Identity ──────────────────────────────────────────────────────────── */
 #define DRONE_ID          1
-#define DRONE_ID_LED_PIN  GPIO_NUM_15
+#define DRONE_ID_LED_PIN  GPIO_NUM_21  /* XIAO S3 onboard USER_LED, active-low */
+#define DRONE_LED_ON_LEVEL  0
+#define DRONE_LED_OFF_LEVEL 1
 
 /* ── Network ───────────────────────────────────────────────────────────── */
 /* Wi-Fi SSID/password and micro-ROS agent IP/port are configured in
@@ -82,8 +98,8 @@ static const char *TAG = "drone";
  * Do not assign a static IP: phone hotspot subnets vary by device. */
 
 /* ── MAVLink / PX4 ─────────────────────────────────────────────────────── */
-#define UART_TX     GPIO_NUM_16  /* XIAO ESP32-C6 D6 / TX */
-#define UART_RX     GPIO_NUM_17  /* XIAO ESP32-C6 D7 / RX */
+#define UART_TX     GPIO_NUM_43  /* XIAO ESP32-S3 Sense D6 / TX */
+#define UART_RX     GPIO_NUM_44  /* XIAO ESP32-S3 Sense D7 / RX */
 #define GCS_SYSID   42
 #define GCS_COMPID  200
 #define PX4_SYSID   1
@@ -165,18 +181,9 @@ static volatile bool  setpoint_received = false;
 static volatile bool gcs_control_active = false;
 
 
-/* Feature flags */
-static volatile bool camera_streaming    = false; /* GCS-controlled image streaming over micro-ROS */
-static bool          camera_hw_ok        = false; /* camera hardware initialised successfully */
-static bool          camera_sw_rotate    = false; /* OV3660: hardware flip ineffective, rotate in software */
-volatile bool vision_enabled = false;
-static volatile bool gcs_control_active  = false;
-
-/* Vision pose cache (written by vision_pose_callback, read by mission/home tasks) */
-volatile float vp_x = 0.0f, vp_y = 0.0f, vp_z = 0.0f;
-volatile float vp_qx = 0.0f, vp_qy = 0.0f, vp_qz = 0.0f, vp_qw = 1.0f;
-volatile bool    vision_pose_valid   = false;
-volatile int64_t last_vision_pose_ms = 0;
+/* Camera publishing is enabled by the first GCS config message. */
+static volatile bool camera_streaming = false;
+static bool camera_sw_rotate = false; /* OV3660: supply missing vertical flip in software */
 
 
 
@@ -323,18 +330,18 @@ static void drone_id_led_update(void)
     switch (state) {
         case 0:
             if ((now - last_tick) >= burst_pause) {
-                blink_index = 0; gpio_set_level(DRONE_ID_LED_PIN, 1);
+                blink_index = 0; gpio_set_level(DRONE_ID_LED_PIN, DRONE_LED_ON_LEVEL);
                 last_tick = now; state = 1; }
             break;
         case 1:
             if ((now - last_tick) >= on_time) {
-                gpio_set_level(DRONE_ID_LED_PIN, 0);
+                gpio_set_level(DRONE_ID_LED_PIN, DRONE_LED_OFF_LEVEL);
                 last_tick = now; blink_index++; state = 2; }
             break;
         case 2:
             if (blink_index >= DRONE_ID) { state = 0; last_tick = now; }
             else if ((now - last_tick) >= off_time) {
-                gpio_set_level(DRONE_ID_LED_PIN, 1); last_tick = now; state = 1; }
+                gpio_set_level(DRONE_ID_LED_PIN, DRONE_LED_ON_LEVEL); last_tick = now; state = 1; }
             break;
     }
 }
@@ -342,6 +349,9 @@ static void drone_id_led_update(void)
 /* ══════════════════════════════════════════════════════════════════════════
  * Camera config
  * ══════════════════════════════════════════════════════════════════════════ */
+
+/* Camera pin mapping is supplied by boards.h. */
+static char topic_camera_frame[32] = "drone_camera";
 
 static const camera_config_t camera_config = {
     .pin_pwdn = CAMERA_PIN_PWDN, .pin_reset = CAMERA_PIN_RESET,
@@ -361,52 +371,6 @@ static const camera_config_t camera_config = {
     .fb_location  = CAMERA_FB_IN_PSRAM,
     .grab_mode    = CAMERA_GRAB_LATEST,
 };
-
-/* ══════════════════════════════════════════════════════════════════════════
- * Black-frame generator with "D{ID}" text
- *
- * 3×5 pixel bitmap font (3 bits per row, MSB = leftmost pixel).
- * Indices: 0=D  1='1'  2='2'  3='3'  4='4'  5='5'
- * ══════════════════════════════════════════════════════════════════════════ */
-
-static const uint8_t BF_FONT[6][5] = {
-    { 0b110, 0b101, 0b101, 0b101, 0b110 },  /* D */
-    { 0b010, 0b110, 0b010, 0b010, 0b111 },  /* 1 */
-    { 0b110, 0b001, 0b010, 0b100, 0b111 },  /* 2 */
-    { 0b110, 0b001, 0b110, 0b001, 0b110 },  /* 3 */
-    { 0b101, 0b101, 0b111, 0b001, 0b001 },  /* 4 */
-    { 0b111, 0b100, 0b110, 0b001, 0b110 },  /* 5 */
-};
-
-static void bf_draw_char(uint8_t *buf, int cx, int cy, int fi, int scale)
-{
-    for (int row = 0; row < 5; row++) {
-        for (int col = 0; col < 3; col++) {
-            if (!((BF_FONT[fi][row] >> (2 - col)) & 1)) continue;
-            for (int sy = 0; sy < scale; sy++) {
-                for (int sx = 0; sx < scale; sx++) {
-                    int px = cx + col * scale + sx;
-                    int py = cy + row * scale + sy;
-                    if (px >= 0 && px < 80 && py >= 0 && py < 60)
-                        buf[py * 80 + px] = 0xFF;
-                }
-            }
-        }
-    }
-}
-
-/* Fill 80×60 mono8 buffer with black frame + centred "D{id}" */
-static void generate_black_frame(uint8_t *buf, int id)
-{
-    memset(buf, 0, 80 * 60);
-    const int scale  = 2;
-    const int char_w = 3 * scale + scale;   /* char width + 1 px gap */
-    int x0 = 40 - char_w;                   /* centre two chars */
-    int y0 = 30 - (5 * scale) / 2;
-    int fi = (id >= 1 && id <= 5) ? id : 1;
-    bf_draw_char(buf, x0,          y0, 0,  scale);   /* D      */
-    bf_draw_char(buf, x0 + char_w, y0, fi, scale);   /* digit  */
-}
 
 /* ══════════════════════════════════════════════════════════════════════════
  * micro-ROS resources
@@ -829,67 +793,43 @@ static void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
         RCSOFTCHECK(rcl_publish(&publisher_battery, &battery_pub_msg, NULL));
     }
 
-    /* Camera — publish live frames; on streaming→off transition send one black frame */
-    static bool prev_camera_streaming = false;
+    /* Camera image publisher: grayscale 160x120 capture downsampled to 80x60.
+     * Publish at 5 FPS (every second 100 ms callback) to keep telemetry responsive. */
     static uint8_t img_skip = 0;
-    if (publisher_image_ok && camera_streaming) {
-        prev_camera_streaming = true;
-        /* Publish at 5 FPS (every 2nd 100ms callback) — keeps reliable output
-         * stream free so marker/state publishers are not blocked */
-        if (++img_skip >= 2) {
-            img_skip = 0;
-            camera_fb_t *pic = esp_camera_fb_get();
-            if (pic) {
-                if (pic->len <= img_msg.data.capacity) {
-                    clock_gettime(CLOCK_REALTIME, &ts);
-                    img_msg.header.stamp.sec     = ts.tv_sec;
-                    img_msg.header.stamp.nanosec = ts.tv_nsec;
-                    img_msg.header.frame_id =
-                        micro_ros_string_utilities_set(img_msg.header.frame_id, topic_camera_frame);
-                    /* Downsample 160×120 → 80×60 to fit micro-ROS serialization buffer.
-                     * OV3660: hardware flip registers are ineffective — reverse pixel
-                     * indices to rotate 180° in software (negligible CPU cost at 5 FPS).
-                     * OV2640: hardware flip handles rotation, normal index order. */
-                    img_msg.width  = 80; img_msg.height = 60; img_msg.step = 80;
-                    img_msg.encoding = micro_ros_string_utilities_set(img_msg.encoding, "mono8");
-                    img_msg.data.size = 80 * 60;
-                    const uint8_t *src = (const uint8_t *)pic->buf;
-                    uint8_t       *dst = img_msg.data.data;
-                    if (camera_sw_rotate) {
-                        /* OV3660: hardware hmirror persists (AEC only clears vflip bit).
-                         * Reverse only y to supply the missing vflip in software.
-                         * Do NOT reverse x — hmirror is already applied by hardware. */
-                        for (int y = 0; y < 60; y++)
-                            for (int x = 0; x < 80; x++)
-                                dst[y * 80 + x] = src[(119 - y * 2) * 160 + (x * 2)];
-                    } else {
-                        for (int y = 0; y < 60; y++)
-                            for (int x = 0; x < 80; x++)
-                                dst[y * 80 + x] = src[(y * 2) * 160 + (x * 2)];
-                    }
-                    RCSOFTCHECK(rcl_publish(&publisher_image, &img_msg, NULL));
-                }
-                esp_camera_fb_return(pic);
-            } else {
-                ESP_LOGW(TAG, "Camera capture failed");
-            }
-        }
-    } else if (publisher_image_ok && prev_camera_streaming) {
-        /* One-shot: streaming just turned off — push black frame with drone ID */
-        prev_camera_streaming = false;
+    if (publisher_image_ok && camera_streaming && ++img_skip >= 2) {
         img_skip = 0;
-        if (img_msg.data.capacity >= 80 * 60) {
-            clock_gettime(CLOCK_REALTIME, &ts);
-            img_msg.header.stamp.sec     = ts.tv_sec;
-            img_msg.header.stamp.nanosec = ts.tv_nsec;
-            img_msg.header.frame_id =
-                micro_ros_string_utilities_set(img_msg.header.frame_id, topic_camera_frame);
-            img_msg.width    = 80; img_msg.height = 60; img_msg.step = 80;
-            img_msg.encoding = micro_ros_string_utilities_set(img_msg.encoding, "mono8");
-            img_msg.data.size = 80 * 60;
-            generate_black_frame(img_msg.data.data, DRONE_ID);
-            RCSOFTCHECK(rcl_publish(&publisher_image, &img_msg, NULL));
-            ESP_LOGI(TAG, "Camera off — black frame sent");
+        camera_fb_t *pic = esp_camera_fb_get();
+        if (pic) {
+            if (pic->len >= (size_t)(160 * 120) &&
+                img_msg.data.capacity >= (size_t)(80 * 60)) {
+                clock_gettime(CLOCK_REALTIME, &ts);
+                img_msg.header.stamp.sec = ts.tv_sec;
+                img_msg.header.stamp.nanosec = ts.tv_nsec;
+                img_msg.header.frame_id =
+                    micro_ros_string_utilities_set(img_msg.header.frame_id, topic_camera_frame);
+                img_msg.width = 80;
+                img_msg.height = 60;
+                img_msg.step = 80;
+                img_msg.encoding =
+                    micro_ros_string_utilities_set(img_msg.encoding, "mono8");
+                img_msg.data.size = 80 * 60;
+
+                const uint8_t *src = (const uint8_t *)pic->buf;
+                uint8_t *dst = img_msg.data.data;
+                for (int y = 0; y < 60; y++) {
+                    const int source_y = camera_sw_rotate ? (119 - y * 2) : (y * 2);
+                    for (int x = 0; x < 80; x++) {
+                        dst[y * 80 + x] = src[source_y * 160 + x * 2];
+                    }
+                }
+                RCSOFTCHECK(rcl_publish(&publisher_image, &img_msg, NULL));
+            } else {
+                ESP_LOGW(TAG, "Camera frame/message buffer size mismatch (frame=%u capacity=%u)",
+                         (unsigned)pic->len, (unsigned)img_msg.data.capacity);
+            }
+            esp_camera_fb_return(pic);
+        } else {
+            ESP_LOGW(TAG, "Camera capture failed");
         }
     }
 
@@ -1066,7 +1006,6 @@ static void micro_ros_task(void *arg)
     conf.max_basic_type_sequence_capacity = 5;
     micro_ros_utilities_memory_rule_t const rules[] = {
         {"header.frame_id", 40},
-        {"format",           5},
         {"encoding",        10},
         {"data",         19200},
     };
@@ -1189,8 +1128,7 @@ void app_main(void)
 
 
     if (esp_camera_init(&camera_config) != ESP_OK) {
-        ESP_LOGE(TAG, "Camera init failed — ArUco and streaming disabled");
-        camera_hw_ok = false;
+        ESP_LOGE(TAG, "Camera init failed — image publishing unavailable");
     } else {
         ESP_LOGI(TAG, "Camera OK");
         sensor_t *s = esp_camera_sensor_get();
@@ -1205,8 +1143,8 @@ void app_main(void)
             s->set_aec_value(s, s->id.PID == OV3660_PID ? 300 : 400);
             if (s->id.PID == OV3660_PID) {
                 /* OV3660 ships with digital noise reduction (DNR) active via
-                 * default register 0x5306=0x1c.  DNR blurs image edges — exactly
-                 * what ArUco's adaptive threshold needs to find markers.  OV2640
+                 * default register 0x5306=0x1c.  DNR can soften image detail —
+                 * which can soften image detail.  OV2640
                  * has no DNR block, which is why it appears higher-contrast.
                  * Disable DNR and push contrast/sharpness to max (3) to match
                  * OV2640 edge definition as closely as possible. */
@@ -1231,8 +1169,7 @@ void app_main(void)
                      camera_sw_rotate ? "OV3660" : "OV2640",
                      camera_sw_rotate ? "software" : "hardware flip");
         }
-        /* Camera hardware ready — ArUco will start after micro-ROS connects. */
-        camera_hw_ok = true;
+        ESP_LOGI(TAG, "Camera ready — image publishing starts after the first GCS config message");
     }
 
 
@@ -1241,6 +1178,7 @@ void app_main(void)
     snprintf(drone_ns,           sizeof(drone_ns),           "drone_%d",                   DRONE_ID);
     snprintf(topic_gcs_command,  sizeof(topic_gcs_command),   "/gcs/drone_%d/command",      DRONE_ID);
     snprintf(topic_image,        sizeof(topic_image),         "/drone_%d/camera/image_raw", DRONE_ID);
+    snprintf(topic_camera_frame, sizeof(topic_camera_frame), "drone_%d_camera", DRONE_ID);
     snprintf(topic_gcs_config,   sizeof(topic_gcs_config),    "/gcs/drone_%d/config",       DRONE_ID);
     snprintf(topic_gcs_control,  sizeof(topic_gcs_control),   "/gcs/drone_%d/control",      DRONE_ID);
     snprintf(topic_state,        sizeof(topic_state),          "/drone_%d/state",            DRONE_ID);
@@ -1270,6 +1208,7 @@ void app_main(void)
         .intr_type    = GPIO_INTR_DISABLE,
     };
     ESP_ERROR_CHECK(gpio_config(&io_conf));
+    gpio_set_level(DRONE_ID_LED_PIN, DRONE_LED_OFF_LEVEL);
 
     vTaskDelay(pdMS_TO_TICKS(1000));
     printf("\r\nDevice Starting — Drone ID %d\r\n", DRONE_ID);
@@ -1277,13 +1216,9 @@ void app_main(void)
     uart_mavlink_init();
     xTaskCreate(mavlink_rx_task_fn, "mav_rx", 4096, NULL, 4, NULL);
 
-    if (camera_hw_ok) {
-        aruco_task_start();
-    }
-
-    /* ESP32-C6 has no external PSRAM on the XIAO board.
-     * Allocate the micro-ROS task stack from internal SRAM. FreeRTOS stack
-     * depth is expressed in StackType_t words, matching CONFIG_MICRO_ROS_APP_STACK. */
+    /* Keep the micro-ROS task stack in internal SRAM. Camera frame buffers
+     * are configured separately for PSRAM (the XIAO S3 Sense has 8 MB PSRAM).
+     * FreeRTOS stack depth is expressed in StackType_t words. */
     ESP_LOGI(TAG, "Free internal heap: %u B",
              (unsigned)esp_get_free_heap_size());
     BaseType_t uros_created = xTaskCreate(
@@ -1294,7 +1229,7 @@ void app_main(void)
     if (uros_created != pdPASS) {
         ESP_LOGE(TAG, "uros_task creation FAILED — insufficient internal RAM");
     } else {
-        ESP_LOGI(TAG, "uros_task created OK (stack=%d words, internal SRAM)",
+        ESP_LOGI(TAG, "uros_task created OK (stack=%d words, internal stack)",
                  CONFIG_MICRO_ROS_APP_STACK);
     }
 
