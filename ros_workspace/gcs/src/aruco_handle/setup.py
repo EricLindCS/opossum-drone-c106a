@@ -1,6 +1,8 @@
 from setuptools import setup
+import os
+from glob import glob
 
-package_name = 'landing_platform_pose'
+package_name = 'aruco_handle'
 
 setup(
     name=package_name,
@@ -10,18 +12,20 @@ setup(
         ('share/ament_index/resource_index/packages',
          ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Eric Lind',
     maintainer_email='elind1@berkeley.edu',
-    description='ArUco-based landing platform pose estimator for ROS 2.',
+    description='ArUco-based handle search pose estimator for ROS 2.',
     license='UNLICENSED',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'platform_pose_node = '
-            'landing_platform_pose.platform_pose_node:main',
+            'aruco_node = aruco_handle.aruco_node:main',
+            'platform_pose_node = aruco_handle.platform_pose_node:main',
         ],
     },
 )

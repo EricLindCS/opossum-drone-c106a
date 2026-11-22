@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>landing_platform_pose</name>
+  <name>aruco_handle</name>
   <version>0.1.0</version>
-  <description>ArUco-based landing platform pose estimator for ROS 2.</description>
+  <description>ArUco-based handle search pose estimator for ROS 2.</description>
   <maintainer email="elind1@berkeley.edu">Eric Lind</maintainer>
   <license>UNLICENSED</license>
 
