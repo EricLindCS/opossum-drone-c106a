@@ -4,3 +4,6 @@ dependencies:
     override_path: "../../../micro_ros_espidf_component"
   espressif/mavlink: "^1.0.0~1"
   espressif/esp32-camera: "^2.0.15"
+
+  espressif/opencv:
+    version: "^4.10.0~3"

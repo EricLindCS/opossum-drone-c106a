@@ -33,6 +33,21 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.0.0~1
+  espressif/opencv:
+    component_hash: 9a5e4f3453048ab05419bbef0e5ab67cc98be5e0d51d8a194f41c167c63921d5
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    version: 4.10.0~3
   idf:
     source:
       type: idf
@@ -63,7 +78,8 @@ dependencies:
 direct_dependencies:
 - espressif/esp32-camera
 - espressif/mavlink
+- espressif/opencv
 - micro-ros/micro_ros_espidf_component
-manifest_hash: 1f07512089523e77a04bb25b63610424cf57c72df8d95d60d9fa62238bf7f09b
+manifest_hash: dbd07e048d493846e11e70289925fe86e931c95864101c820365f67e46284a87
 target: esp32s3
 version: 3.0.0

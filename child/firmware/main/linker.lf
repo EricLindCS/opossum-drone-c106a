@@ -1,0 +1,9 @@
+[scheme:opencv_bss_psram]
+entries:
+    bss -> extern_ram
+    common -> extern_ram
+
+[mapping:opencv_imgproc_psram]
+archive: libopencv_imgproc.a
+entries:
+    * (opencv_bss_psram)
