@@ -38,7 +38,7 @@ opossum_drone/
 
 ```
 
-#Child Firmware flashing:
+# Child Firmware flashing:
 
 Building:
 - Install docker desktop
