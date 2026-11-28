@@ -1,4 +1,4 @@
-#Project structure 11/28/26
+# Project structure 11/28/26
 
 ```text
 opossum_drone/
@@ -115,6 +115,8 @@ ros2 topic pub --once /gcs/drone_1/config std_msgs/msg/String "{data: 'CONFIG_SO
 ```
 
 ## Child Drone ROS 2 Topics
+
+#### See /gcs/src/reciever/cube_mission for a sample flight that traces the path of a cube
 
 The child firmware uses `DRONE_ID` to generate every topic name. The current firmware is configured as drone 1, so the topic names below use `/drone_1` and `/gcs/drone_1`. Change `DRONE_ID` in `child/firmware/main/main.c` and rebuild for another drone ID.
 
