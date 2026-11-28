@@ -63,7 +63,7 @@ python3 -m esptool --chip esp32c6 --port /dev/cu.usbmodem101 --baud 460800 write
 ```
 (replace /dev/cu... with your usb serial port)
 
-#Connecting to and commanding and the child drone
+# Connecting to and commanding and the child drone
 
 - Install Micro-Ros on your "ground station" and make sure it's on a wifi network the child can connect to (a hotspot works great for this)
 
