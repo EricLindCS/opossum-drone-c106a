@@ -36,6 +36,8 @@ opossum_drone/
 │   │   └── src/
 │   └── src/
 
+```
+
 #Child Firmware flashing:
 
 Building:
